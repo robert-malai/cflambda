@@ -145,19 +145,3 @@ def handler(event, context):
                         if instance.state['Name'] in ['running']:
                             logger.info(f"Stopping instance {instance.id} ({instance_name})")
                             instance.stop()
-
-
-if __name__ == '__main__' and 'LAMBDA_TASK_ROOT' not in os.environ:
-    # Test code in order to check the functionality in a controlled virtual environment
-
-    import sys
-
-    # redirect logging to console
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.DEBUG)
-    ch.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.addHandler(ch)
-
-    test_trigger = croniter('*/10 * * * *', datetime.now(tz.tzutc()), ret_type=datetime).get_prev()
-
-    handler({"time": test_trigger.isoformat()}, None)

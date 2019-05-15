@@ -17,23 +17,22 @@ Resources:
         Variables:
           TIMEZONE: 'America/New_York'
       Policies:
-        - AWSLambdaVPCAccessExecutionRole
         -
           Version: '2012-10-17'
           Statement:
-            - Sid: LambdaCanAccessParameterStore
+            - Sid: LambdaCanStartStopInstances
               Effect: Allow
               Action:
-                - 'ssm:GetParameter*'
-              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*'
-        -
-          Version: '2012-10-17'
-          Statement:
-            - Sid: AllowSendingReportDefinitions
-              Effect: Allow
-              Action:
-                - 'sqs:SendMessage'
-              Resource: !ImportValue ReportRunnerQueueArn
+                - 'ec2:Describe*'
+                - 'ec2:StartInstances'
+                - 'ec2:StopInstances'
+              Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:*'
+      Events:
+        AutoStartStopExecution:
+          Type: Schedule
+          Properties:
+            Schedule: 'cron(0/10 * * * ? *)'  # Fires every 10 minutes
+
 
 Outputs:
   AutoStartStopFunctionArn:
