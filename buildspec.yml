@@ -1,0 +1,31 @@
+version: 0.2
+
+env:
+  variables:
+    DB_CONNECTION_PARAMS: "/mi/database/prod"
+
+phases:
+  install:
+    commands:
+      - pip install --no-cache-dir boto3 awscli aws-sam-cli
+      - git config --global credential.helper '!aws codecommit credential-helper $@'
+      - git config --global credential.UseHttpPath true
+      - pip install --no-cache-dir -r app/requirements.txt
+  pre_build:
+    commands:
+      - export PYTHONPATH=$PWD/app:$PYTHONPATH
+      - python -m unittest discover
+  build:
+    commands:
+      - sam build --template template.yml
+      - >
+         sam package
+         --template-file .aws-sam/build/template.yaml
+         --s3-bucket ${LAMBDA_ARTIFACTS_BUCKET}
+         --s3-prefix ${LAMBDA_CODE_KEY}
+         --output-template-file output-template.yml
+
+artifacts:
+  type: zip
+  files:
+    - output-template.yml

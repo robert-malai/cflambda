@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: "Auto start-stop functionality for the account's EC2 containers."
+
+Resources:
+  AutoStartStopFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: 'auto-start-stop'
+      Description: "Auto start-stop functionality for the account's EC2 containers."
+      CodeUri: app/
+      Handler: main.handler
+      Runtime: python3.7
+      MemorySize: 128   # MB
+      Timeout: 15       # seconds
+      Environment:
+        Variables:
+          TIMEZONE: 'America/New_York'
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+        -
+          Version: '2012-10-17'
+          Statement:
+            - Sid: LambdaCanAccessParameterStore
+              Effect: Allow
+              Action:
+                - 'ssm:GetParameter*'
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*'
+        -
+          Version: '2012-10-17'
+          Statement:
+            - Sid: AllowSendingReportDefinitions
+              Effect: Allow
+              Action:
+                - 'sqs:SendMessage'
+              Resource: !ImportValue ReportRunnerQueueArn
+
+Outputs:
+  AutoStartStopFunctionArn:
+    Value: !GetAtt AutoStartStopFunction.Arn
+  AutoStartStopFunctionIamRole:
+    Value: !GetAtt AutoStartStopFunctionRole.Arn
