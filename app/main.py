@@ -6,14 +6,13 @@ In order to enable the feature on a container, define the following configured t
   consider a True value for it.
   - START_TAG (start-stop:start) with a valid cron expression (5 or 6 columns)
   - STOP_TAG (start-stop:stop) with a valid cron expression
-
-The cron expressions should depict scheduled uptime and downtimes greater than MIN_UPTIME (60 minutes) and
-MIN_DOWNTIME (60 minutes)
 """
 
-import logging
 import os
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Optional
 
 import boto3
 from croniter import croniter, CroniterBadDateError, CroniterBadCronError
@@ -24,74 +23,64 @@ from dateutil.parser import parse as parse_datetime
 ENABLE_TAG = 'start-stop:enable'
 START_TAG = 'start-stop:start'
 STOP_TAG = 'start-stop:stop'
-ENVIRONMENT_TAG = 'Environment'
-MIN_UPTIME = timedelta(minutes=60)
-MIN_DOWNTIME = timedelta(minutes=60)
 
 # Environment variables
 TIMEZONE = tz.gettz(os.getenv('TIMEZONE', 'America/New_York'))
 
-
 # One time initializations
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
 ec2 = boto3.resource('ec2')
 
 
-def get_instance_params(instance: ec2.Instance, now: datetime):
+@dataclass(frozen=True)
+class StartStopConfig(object):
     """
-    Will extract the start-stop parameters out of the instance's tags. Performs validation and will throw ValueError in
-    case of any inconsistencies.
-    :param now: the current timestamp, from the outer context
-    :param instance: an ec2 instance resource
-    :return: tuple of enabled, prev_start_time, prev_stop_time
+    Holds start-stop configuration for an EC2 instance.
     """
-    try:
-        start_tag = next(tag['Value'] for tag in instance.tags if tag['Key'] == START_TAG)
-        stop_tag = next(tag['Value'] for tag in instance.tags if tag['Key'] == STOP_TAG)
-        enable_tag = next((tag['Value'].lower() for tag in instance.tags if tag['Key'] == ENABLE_TAG), "enabled")
-    except StopIteration:
-        raise ValueError(f"Problem reading the tag values on instance {instance.id}")
-    else:
-        if enable_tag in ["enabled", "yes", "true", "1", "on"]:
-            try:
-                prev_start_time, prev_stop_time = None, None
-                next_start_time, next_stop_time = None, None
-                if start_tag:
-                    prev_start_time = croniter(start_tag, now, ret_type=datetime).get_prev()
-                    next_start_time = croniter(start_tag, now, ret_type=datetime).get_next()
+    prev_start: datetime = None
+    prev_stop: datetime = None
+    enabled: bool = True
 
-                if stop_tag:
-                    prev_stop_time = croniter(stop_tag, now, ret_type=datetime).get_prev()
-                    next_stop_time = croniter(stop_tag, now, ret_type=datetime).get_next()
-
-            except (CroniterBadDateError, CroniterBadCronError, TypeError) as e:
-                raise ValueError(f"Bad cron expression: {e}")
-            else:
-                if not stop_tag and not stop_tag:
-                    raise ValueError("Bad cron expression: you have to provide at least one expression")
-
-                if start_tag and stop_tag:
-                    # In this case we can validate the scheduled uptime and downtime of the instance
-                    if prev_stop_time < prev_start_time:
-                        scheduled_running_time = next_stop_time - prev_start_time
-                        scheduled_stopped_time = prev_start_time - prev_stop_time
-                    else:
-                        scheduled_running_time = prev_stop_time - prev_start_time
-                        scheduled_stopped_time = next_start_time - prev_stop_time
-
-                    if scheduled_running_time < MIN_UPTIME:
-                        raise ValueError(f"Bad cron expression: instance uptime ({scheduled_running_time}) is less "
-                                         f"then minimum ({MIN_UPTIME})")
-
-                    if scheduled_stopped_time < MIN_DOWNTIME:
-                        raise ValueError(f"Bad cron expression: instance downtime ({scheduled_stopped_time}) is less "
-                                         f"then minimum ({MIN_DOWNTIME})")
-
-                return True, prev_start_time, prev_stop_time
+    @staticmethod
+    def from_instance_tags(instance, now: datetime) -> Optional['StartStopConfig']:
+        enabled, prev_start, prev_stop = True, None, None
+        try:
+            for tag in instance.tags:
+                if tag['Key'] == START_TAG:
+                    prev_start = croniter(tag['Value'], now, ret_type=datetime).get_prev()
+                if tag['Key'] == STOP_TAG:
+                    prev_stop = croniter(tag['Value'], now, ret_type=datetime).get_prev()
+                if tag['Key'] == ENABLE_TAG:
+                    enabled = tag['Value'].lower() in ['enabled', 'yes', 'true', '1', 'on']
+        except (CroniterBadDateError, CroniterBadCronError, TypeError) as e:
+            print(f"Bad cron expression: {e}")
+            return None
         else:
-            return False, None, None
+            if prev_start or prev_stop:
+                return StartStopConfig(prev_start=prev_start, prev_stop=prev_stop, enabled=enabled)
+            else:
+                print("Bad cron expression: you have to provide at least one expression (start or stop)")
+                return None
+
+
+class StartStopAction(Enum):
+    START = 'start'
+    STOP = 'stop'
+
+
+def do_start_stop_action(instance, action: StartStopAction = None):
+    """
+    Logic to perform a simple start ort stop on the designated instance, checking for proper state before performing
+    the action.
+    """
+    if action:
+        if action == StartStopAction.START:
+            if instance.state['Name'] in ['stopped']:
+                print(f"Starting instance {instance.id}")
+                instance.start()
+        if action == StartStopAction.STOP:
+            if instance.state['Name'] in ['running']:
+                print(f"Stopping instance {instance.id}")
+                instance.stop()
 
 
 def handler(event, context):
@@ -100,48 +89,33 @@ def handler(event, context):
     extract the parameters out of the instance tags and then will run either in schedule detection mode or in trigger
     detection mode.
     """
+    trigger = parse_datetime(event['time']).astimezone(TIMEZONE)
     now = datetime.now(TIMEZONE)
-    try:
-        trigger = parse_datetime(event['time']).astimezone(TIMEZONE)
-    except (TypeError, KeyError, ValueError):
-        raise ValueError("Cannot read trigger event time")
 
-    logger.info(f"Triggered execution at {trigger}")
+    print(f"Triggered execution at {trigger}")
+
     for instance in ec2.instances.filter(Filters=[{'Name': f'tag:{START_TAG}', 'Values': ['*']},
                                                   {'Name': f'tag:{STOP_TAG}', 'Values': ['*']}]):
-        instance_name = next((tag['Value'] for tag in instance.tags if tag['Key'] == 'Name'), 'Unnamed')
-        try:
-            enabled, prev_start_time, prev_stop_time = get_instance_params(instance, now)
-        except ValueError as e:
-            logger.error(f"Wrong params values for '{instance.id}' ({instance_name}): {e}")
-            continue
-        else:
-            logger.info(f"Inspecting instance {instance.id} ({instance_name}); auto start-stop: {enabled}")
-            if enabled:
-                if prev_start_time and prev_stop_time:
-                    logger.info("Operate in schedule detection mode")
 
-                    if prev_stop_time < prev_start_time:
-                        # instance should be running
-                        if instance.state['Name'] in ['stopped']:
-                            logger.info(f"Starting instance {instance.id} ({instance_name})")
-                            instance.start()
-                    else:
-                        # instance should be stopped
-                        if instance.state['Name'] in ['running']:
-                            logger.info(f"Stopping instance {instance.id} ({instance_name})")
-                            instance.stop()
+        print(f"Inspecting instance {instance.id}")
+        config = StartStopConfig.from_instance_tags(instance, now)
+        if config and config.enabled:
+            action: Optional[StartStopAction] = None
+            if config.prev_start and config.prev_stop:
+                print("Operate in schedule mode")
+                if config.prev_stop < config.prev_start:
+                    # instance should be running
+                    action = StartStopAction.START
                 else:
-                    logger.info("Operate in trigger detection mode")
+                    # instance should be stopped
+                    action = StartStopAction.STOP
+            else:
+                print("Operate in trigger mode")
+                if config.prev_start == trigger:
+                    # we should start the instance
+                    action = StartStopAction.START
+                if config.prev_stop == trigger:
+                    # we should stop the instance
+                    action = StartStopAction.STOP
 
-                    if prev_start_time and prev_start_time == trigger:
-                        # we should start the instance
-                        if instance.state['Name'] in ['stopped']:
-                            logger.info(f"Starting instance {instance.id} ({instance_name})")
-                            instance.start()
-
-                    if prev_stop_time and prev_stop_time == trigger:
-                        # we should stop the instance
-                        if instance.state['Name'] in ['running']:
-                            logger.info(f"Stopping instance {instance.id} ({instance_name})")
-                            instance.stop()
+            do_start_stop_action(instance, action)

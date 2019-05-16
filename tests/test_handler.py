@@ -1,70 +1,38 @@
-from unittest import TestCase
 from datetime import datetime, date, time
+from unittest import TestCase
+
 from botocore.stub import Stubber, ANY
 
-from main import ec2, handler
+from main import ec2, handler, TIMEZONE, ENABLE_TAG, START_TAG, STOP_TAG
+
+RUNNING_INSTANCE = {'Code': 123, 'Name': 'running'}
+STOPPED_INSTANCE = {'Code': 123, 'Name': 'stopped'}
 
 
 class TestMainHandler(TestCase):
     ec2_list = {
         'Reservations': [
             {
-                'Groups': [],
                 'Instances': [
                     {
-                        'InstanceId': 'id 1',
-                        'State': {
-                            'Code': 123,
-                            'Name': 'running'
-                        },
+                        'InstanceId': 'i-0ff1234',
+                        'State': RUNNING_INSTANCE,
                         'Tags': [
-                            {
-                                'Key': 'start-stop:enable',
-                                'Value': 'True'
-                            },
-                            {
-                                'Key': 'start-stop:start',
-                                'Value': '0 6 * * *'
-                            },
-                            {
-                                'Key': 'start-stop:stop',
-                                'Value': '0 18 * * *'
-                            },
-                            {
-                                'Key': 'Environment',
-                                'Value': 'DEV'
-                            },
+                            {'Key': ENABLE_TAG, 'Value': 'True'},
+                            {'Key': START_TAG, 'Value': '0 6 * * *'},
+                            {'Key': STOP_TAG, 'Value': '0 18 * * *'},
                         ]
                     },
                     {
-                        'InstanceId': 'id 2',
-                        'State': {
-                            'Code': 123,
-                            'Name': 'running'
-                        },
+                        'InstanceId': 'i-0ff1235',
+                        'State': STOPPED_INSTANCE,
                         'Tags': [
-                            {
-                                'Key': 'start-stop:enable',
-                                'Value': 'True'
-                            },
-                            {
-                                'Key': 'start-stop:start',
-                                'Value': '0 6 * * *'
-                            },
-                            {
-                                'Key': 'start-stop:stop',
-                                'Value': '0 18 * * *'
-                            },
-                            {
-                                'Key': 'Environment',
-                                'Value': 'PROD'
-                            },
+                            {'Key': ENABLE_TAG, 'Value': 'False'},
+                            {'Key': START_TAG, 'Value': '0 6 * * *'},
+                            {'Key': STOP_TAG, 'Value': '0 18 * * *'},
                         ]
                     }
                 ],
-                'OwnerId': 'SomeId',
-                'RequesterId': 'SomeId',
-                'ReservationId': 'SomeId'
             }
         ]
     }
@@ -78,10 +46,10 @@ class TestMainHandler(TestCase):
 
     def test_handler(self):
         self._ec2.add_response('describe_instances', self.ec2_list, {'Filters': ANY})
-        self._ec2.add_response('stop_instances', {}, {'InstanceIds': ['id 1']})
+        self._ec2.add_response('stop_instances', {}, {'InstanceIds': ['i-0ff1234']})
 
-        event = {'time': datetime.combine(date.today(), time(hour=6, minute=0, second=0, microsecond=0)).isoformat()}
+        trigger = datetime.combine(date.today(), time(hour=6, tzinfo=TIMEZONE))
 
-        handler(event, None)
+        handler({'time': trigger.isoformat()}, None)
 
         self._ec2.assert_no_pending_responses()
