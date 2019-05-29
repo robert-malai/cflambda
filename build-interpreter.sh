@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-docker build --no-cache --tag ${PWD##*/}-interpreter:latest \
+docker build --pull --tag ${PWD##*/}-interpreter:latest \
     --build-arg AWS_DEFAULT_REGION=$(aws configure get region) \
     --build-arg AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id) \
     --build-arg AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key) \
